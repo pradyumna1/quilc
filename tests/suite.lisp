@@ -11,7 +11,7 @@
                                             *standard-output*))
   (let ((quil::*compress-carefully* t))
     (cond
-      (parallelize
+      (t
        (setf lparallel:*kernel* (lparallel:make-kernel 2))
        (let ((fiasco::*debug-on-unexpected-error* nil)
              (fiasco::*debug-on-assertion-failure* nil)
