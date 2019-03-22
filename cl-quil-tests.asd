@@ -9,6 +9,7 @@
   :depends-on (#:cl-quil
                #:magicl
                #:alexandria
+               #:lparallel
                #:fiasco
                #:uiop
                #:yacc                     ; for the conditions
