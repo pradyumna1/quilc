@@ -89,7 +89,7 @@ some test programs."
      (lambda (state-prep)
        (let ((quil::*enable-state-prep-compression* state-prep))
          (format t "    With *ENABLE-STATE-PREP-COMPRESSION* ~a~%" quil::*enable-state-prep-compression*)
-         (dolist (file (uiop:directory-files *compiler-hook-test-file-directory* #P"sohaib.quil"))
+         (dolist (file (uiop:directory-files *compiler-hook-test-file-directory* #P"*.quil"))
            (format t "      Testing file ~a:" (pathname-name file))
            (dolist (architecture (list ':cz ':iswap ':cphase ':piswap ':cnot))
              (format t " ~a" architecture)
