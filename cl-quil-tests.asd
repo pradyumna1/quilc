@@ -41,4 +41,5 @@
                (:file "compiler-hook-tests")
                (:file "benchmarking-procedures-tests")
                (:file "typed-memory-tests")
-               (:file "approximation-tests")))
+               (:file "approximation-tests")
+               (:file "solovay-kitaev-tests")))
