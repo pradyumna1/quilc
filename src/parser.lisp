@@ -1888,26 +1888,36 @@ and the reamining tokens."
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;; Entry Point ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun extract-code-sections (code)
-  "Partition CODE into three values:
+  "Partition CODE into five values:
 
     1. List of gate definitions.
 
     2. List of circuit definitions.
 
-    3. List of code to execute."
-  (let ((gate-defs nil)
-        (circ-defs nil)
-        (memory-defs nil)
-        (exec-code nil))
+    3. List of waveform definitions (QuilT).
+
+    4. List of calibration definitions (QuilT).
+
+    5. List of code to execute."
+  (let (gate-defs
+        circ-defs
+        wf-defs
+        calib-defs
+        memory-defs
+        exec-code)
     (flet ((bin (x)
              (typecase x
                (gate-definition (push x gate-defs))
                (circuit-definition (push x circ-defs))
+               (waveform-definition (push x wf-defs))
+               (calibration-definition (push x calib-defs))
                (memory-descriptor (push x memory-defs))
                (t (push x exec-code)))))
       (mapc #'bin code)
       (values (nreverse gate-defs)
               (nreverse circ-defs)
+              (nreverse wf-defs)
+              (nreverse calib-defs)
               (nreverse memory-defs)
               (nreverse exec-code)))))
 
@@ -1925,11 +1935,13 @@ and the reamining tokens."
                 (setf tok-lines rest-toks)))
       (setf parsed-program (nreverse parsed-program))
       ;; Return the parsed sequence of objects.
-      (multiple-value-bind (gate-defs circ-defs memory-defs exec-code)
+      (multiple-value-bind (gate-defs circ-defs wf-defs calib-defs memory-defs exec-code)
           (extract-code-sections parsed-program)
         (make-instance 'parsed-program
                        :gate-definitions gate-defs
                        :circuit-definitions circ-defs
+                       :waveform-definitions wf-defs
+                       :calibration-definitions calib-defs
                        :memory-definitions memory-defs
                        :executable-code (coerce exec-code 'simple-vector))))))
 
