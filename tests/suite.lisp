@@ -12,7 +12,6 @@
   (let ((quil::*compress-carefully* t))
     (cond
       (t
-       (setf lparallel:*kernel* (lparallel:make-kernel 2))
        (setf lparallel:*kernel* (lparallel:make-kernel 4))
        (let ((fiasco::*debug-on-unexpected-error* nil)
              (fiasco::*debug-on-assertion-failure* nil)
