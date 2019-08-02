@@ -370,7 +370,7 @@ INPUT-STRING that triggered the condition."
 
       ;; QuilT Frame Mutation
       ((:SET-FREQUENCY :SET-PHASE :SHIFT-PHASE :SET-SCALE)
-       (parse-frame-mutation tok-type tok-lines))
+       (parse-simple-frame-mutation tok-type tok-lines))
 
       ;; QuilT pulse
       ((:PULSE)
@@ -1490,7 +1490,7 @@ parameters and the remaining tokens."
                      :duration duration
                      :memory-ref addr))))
 
-(defun parse-frame-mutation (tok-type tok-lines)
+(defun parse-simple-frame-mutation (tok-type tok-lines)
   (match-line ((op tok-type) &rest rest-toks) tok-lines
       (multiple-value-bind (qubit-toks rest-toks)
           ;; Consume tokens until we reach the frame's name (a string)
