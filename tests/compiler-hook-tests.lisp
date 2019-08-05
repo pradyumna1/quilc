@@ -93,14 +93,16 @@ JUMP @a")))
       (quil::compiler-hook pp (quil::build-8Q-chip))
       (is t))))
 
-(defun compare-compiled (file architecture)
+(defun compare-compiled (file architecture rewiring-type)
   (let* ((orig-prog (quil::transform 'quil::compress-qubits
                                      (cl-quil::read-quil-file file)))
          (proc-prog
-           (quil::compiler-hook (quil::transform 'quil::compress-qubits
-                                                 (cl-quil::read-quil-file file))
-                                (quil::build-nQ-linear-chip 5 :architecture architecture)
-                                :protoquil t)))
+           (let ((arguments (list* (quil::transform 'quil::compress-qubits
+                                                    (cl-quil::read-quil-file file))
+                                   (quil::build-nQ-linear-chip 5 :architecture architecture)
+                                   :protoquil t
+                                   (and rewiring-type (list ':rewiring-type rewiring-type)))))
+             (apply #'compiler-hook arguments))))
     (is (quil::matrix-equals-dwim (quil::parsed-program-to-logical-matrix orig-prog)
                                   (quil::parsed-program-to-logical-matrix proc-prog)))
     (list
@@ -118,9 +120,11 @@ some test programs."
         (format *debug-io* "      Testing file ~a:" (pathname-name file))
         (dolist (architecture (list ':cz ':iswap ':cphase ':piswap ':cnot))
           (format *debug-io* " ~a" architecture)
-          (let ((stats (compare-compiled file architecture)))
-            (when print-stats
-              (format *debug-io* "~a" stats))))
+          (dolist (rewiring-type '(nil :naive :partial :greedy))
+            (format *debug-io* " ~a" rewiring-type)
+            (let ((stats (compare-compiled file architecture rewiring-type)))
+              (when print-stats
+                (format *debug-io* "~a" stats)))))
         (terpri *debug-io*)))))
 
 (deftest test-compression-bug-QUILC-152 ()
