@@ -686,7 +686,8 @@ result of BODY, and the (possibly null) list of remaining lines.
 
 (defun parse-parameter-or-expression (toks)
   "Parse a parameter, which may possibly be a compound arithmetic expression. Consumes all tokens given."
-  (if (= 1 (length toks))
+  (if (and (= 1 (length toks))
+           (not (eql ':NAME (token-type (first toks)))))
       (parse-parameter (first toks))
       (let ((*arithmetic-parameters* nil)
             (*segment-encountered* nil))
@@ -1583,7 +1584,7 @@ When ALLOW-EXPRESSIONS is set, we allow for general arithmetic expressions in a 
                 (setf rest-line (butlast rest-line)))
 
               ;; Collect arguments and stash them away.
-              (setf args (mapcar #'parse-qubit args))
+              (setf args (mapcar #'parse-qubit rest-line))
 
               (when (and is-measure-calibration
                          (> (length args) 2))
