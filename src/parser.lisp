@@ -281,6 +281,17 @@ INPUT-STRING that triggered the condition."
 (defvar *formal-arguments-allowed* nil
   "Dynamic variable to control whether formal parameters and arguments are allowed in the current parsing context.")
 
+(defparameter *parse-context* nil
+  "A Quil keyword (e.g. :DEFGATE) indicating the context in which a portion of a Quil instruction is being parsed.")
+
+(defmacro disappointing-token-error (found-token expected-msg &rest format-args)
+  `(quil-parse-error "Expected ~A~@[ in A], but observed a token ~A with value ~A"
+                     ,expected-msg
+                     ,@format-args
+                     ,*parse-context*
+                     (token-type ,found-token)
+                     (token-payload ,found-token)))
+
 (defun parse-program-lines (tok-lines)
   "Parse the next AST object from the list of token lists. Returns two values:
 
@@ -290,6 +301,7 @@ INPUT-STRING that triggered the condition."
   (let* ((line (first tok-lines))
          (tok (first line))
          (tok-type (token-type tok))
+         (*parse-context* tok-type)
          (*line-number* (token-line tok)))
     (case tok-type
       ;; Gate/Circuit Applications
@@ -492,14 +504,15 @@ result of BODY, and the (possibly null) list of remaining lines.
   (case (token-type qubit-tok)
     ((:NAME)
      (unless *formal-arguments-allowed*
-       ;; TODO print context
-       (quil-parse-error "Found the formal parameter ~A where not allowed." (token-payload qubit-tok)))
+       (quil-parse-error "Unexpected formal parameter ~A~@[ in ~A]."
+                         (token-payload qubit-tok)
+                         *parse-context*))
      (formal (token-payload qubit-tok)))
     ((:INTEGER) (qubit (token-payload qubit-tok)))
     (otherwise
-     (quil-parse-error "Unable to parse qubit. Expected a name~@[ or formal parameter], but got ~A"
-                       *formal-arguments-allowed*
-                       (token-type qubit-tok)))))
+     (disappointing-token-error qubit-tok
+                                "a name~@[ or a formal parameter~]"
+                                *formal-arguments-allowed*))))
 
 (defun parse-memory-or-formal-token (tok &key ensure-valid)
   (cond
@@ -507,8 +520,9 @@ result of BODY, and the (possibly null) list of remaining lines.
     ((eql ':AREF (token-type tok))
      (when (and ensure-valid
                 (not (find (car (token-payload tok)) *memory-region-names* :test #'string=)))
-       ;; TODO context
-       (quil-parse-error "Bad memory region name ~a in instruction" (car (token-payload tok))))
+       (quil-parse-error "Bad memory region name ~A~@[ in ~A]"
+                         (car (token-payload tok))
+                         *parse-context*))
      (mref (car (token-payload tok))
            (cdr (token-payload tok))))
 
@@ -520,13 +534,15 @@ result of BODY, and the (possibly null) list of remaining lines.
     ;; Formal argument.
     ((eql ':NAME (token-type tok))
      (unless *formal-arguments-allowed*
-       (quil-parse-error "Found formal argument where it's not allowed."))
+       (quil-parse-error "Found formal argument ~A~@[ in ~A]."
+                         (token-payload tok)
+                         *parse-context*))
      (formal (token-payload tok)))
 
     (t
-     (quil-parse-error "Expected an address~:[~; or formal argument~], got ~S"
-                       *formal-arguments-allowed*
-                       (token-type tok)))))
+     (disappointing-token-error tok
+                                "an address~@[ or a formal argument~]"
+                                *formal-arguments-allowed*))))
 
 (defun parse-simple-instruction (type tok-lines)
   (match-line ((op type)) tok-lines
@@ -577,7 +593,8 @@ result of BODY, and the (possibly null) list of remaining lines.
     (case type
       ((:PARAMETER)
        (unless *formal-arguments-allowed*
-         (quil-parse-error "Found formal parameter where not allowed: ~S"
+         (quil-parse-error "Found formal parameter~@[ in ~A] where not allowed: ~S"
+                           *parse-context*
                            (token-payload tok)))
        (token-payload tok))
       ((:COMPLEX)
@@ -585,19 +602,21 @@ result of BODY, and the (possibly null) list of remaining lines.
       ((:INTEGER)
        (constant (coerce (token-payload tok) 'double-float)))
       (otherwise
-       (quil-parse-error "Token doesn't represent a parameter where expected: ~S" tok)))))
+       (disappointing-token-error tok "a parameter")))))
 
 (defun parse-argument (tok)
   "Parse a token TOK intended to be an argument."
   (declare (special *memory-region-names*)) ; Forward declaration
   (case (token-type tok)
     ((:NAME)
-     (let ((names-memory-region-p (find (token-payload tok) *memory-region-names*
+     (let ((names-memory-region-p (find (token-payload tok)
+                                        *memory-region-names*
                                         :test #'string=)))
        (unless (or names-memory-region-p
                    *formal-arguments-allowed*)
-         (quil-parse-error "Found formal argument where not allowed: ~S"
-                           (token-payload tok)))
+         (quil-parse-error "Unexpected formal argument ~A~@[ in ~A]."
+                           (token-payload tok)
+                           *parse-context*))
        (if names-memory-region-p
            (mref (token-payload tok) 0)
            (formal (token-payload tok)))))
@@ -609,7 +628,7 @@ result of BODY, and the (possibly null) list of remaining lines.
      (mref (car (token-payload tok))
            (cdr (token-payload tok))))
     (otherwise
-     (quil-parse-error "Token doesn't represent an argument where expected: ~S" tok))))
+     (disappointing-token-error tok "an argument"))))
 
 ;; Dear reader:
 ;;
@@ -695,8 +714,9 @@ result of BODY, and the (possibly null) list of remaining lines.
           (cond
             ((and (null *arithmetic-parameters*)
                   (null *segment-encountered*))
-             (unless (numberp result)       ; TODO context
-               (quil-parse-error "A number was expected from arithmetic evaluation. Got something of type ~S."
+             (unless (numberp result)
+               (quil-parse-error "A parameter or arithmetic expression was expected~@[ in ~A~]. Got something of type ~S."
+                                 *parse-context*
                                  (type-of result)))
              (constant result))
 
@@ -708,7 +728,7 @@ result of BODY, and the (possibly null) list of remaining lines.
               (mapcar #'second *arithmetic-parameters*)
               result))
 
-            (t ; TODO context
+            (t
              (quil-parse-error "Formal parameters found in a place they're not allowed.")))))))
 
 (defun parse-application (tok-lines)
@@ -750,8 +770,8 @@ result of BODY, and the (possibly null) list of remaining lines.
         ((endp (cdr non-words))
          (let ((last-tok (first non-words)))
            (unless (eql ':STRING (token-type last-tok))
-             (quil-parse-error "Expected string at end of PRAGMA (or nothing), got ~S."
-                               (token-type last-tok)))
+             (disappointing-token-error last-tok
+                                        "a terminating string"))
            (make-pragma words (token-payload last-tok))))
 
         (t
@@ -805,28 +825,28 @@ result of BODY, and the (possibly null) list of remaining lines.
 
         ;; Check for a name.
         (unless (eql ':NAME (token-type (first params-args)))
-          (quil-parse-error "Expected a name for the DEFGATE"))
+          (disappointing-token-error (first params-args)
+                                     "a name"))
 
         ;; We have a name. Stash it away.
         (setf name (token-payload (pop params-args)))
 
-        (let ((*definition-context* :DEFGATE))
-          (multiple-value-bind (params rest-line) (parse-parameters params-args)
-            (when (eql ':AS (token-type (first rest-line)))
-              (pop rest-line)
-              (let* ((parsed-gate-tok (first rest-line))
-                     (parsed-gate-type (token-type parsed-gate-tok)))
-                (unless (find parsed-gate-type '(:MATRIX :PERMUTATION))
-                  (quil-parse-error "Found unexpected gate type: ~A." (token-payload parsed-gate-tok)))
-                (setf gate-type parsed-gate-type)))
+        (multiple-value-bind (params rest-line) (parse-parameters params-args)
+          (when (eql ':AS (token-type (first rest-line)))
+            (pop rest-line)
+            (let* ((parsed-gate-tok (first rest-line))
+                   (parsed-gate-type (token-type parsed-gate-tok)))
+              (unless (find parsed-gate-type '(:MATRIX :PERMUTATION))
+                (quil-parse-error "Found unexpected gate type: ~A." (token-payload parsed-gate-tok)))
+              (setf gate-type parsed-gate-type)))
 
-            (ecase gate-type
-              (:MATRIX
-               (parse-gate-entries-as-matrix body-lines params name))
-              (:PERMUTATION
-               (when params
-                 (quil-parse-error "Permutation gate definitions do not support parameters."))
-               (parse-gate-entries-as-permutation body-lines name)))))))))
+          (ecase gate-type
+            (:MATRIX
+             (parse-gate-entries-as-matrix body-lines params name))
+            (:PERMUTATION
+             (when params
+               (quil-parse-error "Permutation gate definitions do not support parameters."))
+             (parse-gate-entries-as-permutation body-lines name))))))))
 
 (defun parse-gate-entries-as-permutation (body-lines name)
   (multiple-value-bind (parsed-entries rest-lines)
@@ -949,9 +969,9 @@ result of BODY, and the (possibly null) list of remaining lines.
         (quil-parse-error "Expected dedented line following permutation gate entries."))
       (let* ((entries (remove-if (lambda (tok) (eql ':COMMA (token-type tok)))
                                  modified-line)))
-        (unless (every (lambda (tok) (eql ':INTEGER (token-type tok)))
-                       entries)
-          (quil-parse-error "Expected integers"))
+        (dolist (entry entries)
+          (unless (eql ':INTEGER (token-type entry))
+            (disappointing-token-error entry "an integer")))
         ;; Be careful to continue parsing only when a (by definition) dedented
         ;; line follows
         (values (mapcar #'token-payload entries)
@@ -1007,13 +1027,12 @@ result of BODY, and the (possibly null) list of remaining lines.
 
         ;; Check for name.
         (unless (eql ':NAME (token-type (first params-args)))
-          (quil-parse-error "Expected a name for the DEFCIRCUIT"))
+          (disappointing-token-error (first params-args) "a name"))
 
         ;; Stash it away.
         (setf name (token-payload (pop params-args)))
 
-        (let ((*definition-context* :DEFCIRCUIT))
-          (multiple-value-bind (params rest-line) (parse-parameters params-args)
+        (multiple-value-bind (params rest-line) (parse-parameters params-args)
             ;; Check for colon and incise it.
             (let ((maybe-colon (last rest-line)))
               (when (or (null maybe-colon)
@@ -1035,7 +1054,7 @@ result of BODY, and the (possibly null) list of remaining lines.
                        params            ; formal parameters
                        args              ; formal arguments
                        parsed-body)
-                      rest-lines))))))))
+                      rest-lines)))))))
 
 (defun parse-quil-type (string)
   (check-type string string)
@@ -1156,7 +1175,8 @@ result of BODY, and the (possibly null) list of remaining lines.
   (match-line ((jump jump-type) (label :LABEL-NAME) addr) tok-lines
     (unless (or (eql ':AREF (token-type addr))
                 (eql ':NAME (token-type addr)))
-      (quil-parse-error "Expected an address~:[~; or formal argument~] for conditional jump, got ~S" *formal-arguments-allowed* (token-type addr)))
+      (disappointing-token-error addr
+                                 "an address~:[~; or formal argument~]" *formal-arguments-allowed*))
     (make-instance (ecase jump-type
                      ((:JUMP-WHEN) 'jump-when)
                      ((:JUMP-UNLESS) 'jump-unless))
@@ -1199,40 +1219,39 @@ result of BODY, and the (possibly null) list of remaining lines.
   (match-line ((instr tok-type) target left right &rest rest) tok-lines
     (setf right (cons right rest))
     (flet ((parse-memory-region-name (tok)
-               (unless (eql ':NAME (token-type tok))
-                 (quil-parse-error "Expected a memory region name, but got token of type ~S"
-                                   (token-type tok)))
-               (unless (find (token-payload tok) *memory-region-names* :test #'string=)
-                 (quil-parse-error "Unknown memory region name ~S"
+             (unless (eql ':NAME (token-type tok))
+               (disappointing-token-error tok "a memory region name" ))
+             (unless (find (token-payload tok) *memory-region-names* :test #'string=)
+               (quil-parse-error "Unknown memory region name ~S"
                                    (token-payload tok)))
              (memory-name (token-payload tok))))
       (ecase tok-type
-            ((:LOAD)
-             (unless (= 1 (length right))
-               (quil-parse-error "Invalid right argument to LOAD."))
-             (make-instance 'classical-load
-                            :target (parse-memory-or-formal-token target)
-                            :left (parse-memory-region-name left)
-                            :right (parse-classical-argument right)))
-            ((:STORE)
-             (unless (= 1 (length right))
-               (quil-parse-error "Malformed STORE. Expected a memory reference ~
-                                  as the third argument."))
-             (make-instance 'classical-store
-                            :target (parse-memory-region-name target)
-                            :left (parse-classical-argument (list left))
-                            :right (parse-memory-or-formal-token (first right))))
-            ((:EQ :GT :GE :LT :LE)
-             (make-instance
-              (ecase tok-type
-                (:EQ 'classical-equality)
-                (:GT 'classical-greater-than)
-                (:GE 'classical-greater-equal)
-                (:LT 'classical-less-than)
-                (:LE 'classical-less-equal))
-              :target (parse-memory-or-formal-token target)
-              :left (parse-classical-argument (list left))
-              :right (parse-classical-argument right)))))))
+        ((:LOAD)
+         (unless (= 1 (length right))
+           (quil-parse-error "Invalid right argument to LOAD."))
+         (make-instance 'classical-load
+                        :target (parse-memory-or-formal-token target)
+                        :left (parse-memory-region-name left)
+                        :right (parse-classical-argument right)))
+        ((:STORE)
+         (unless (= 1 (length right))
+           (quil-parse-error "Malformed STORE. Expected a memory reference ~
+                              as the third argument."))
+         (make-instance 'classical-store
+                        :target (parse-memory-region-name target)
+                        :left (parse-classical-argument (list left))
+                        :right (parse-memory-or-formal-token (first right))))
+        ((:EQ :GT :GE :LT :LE)
+         (make-instance
+          (ecase tok-type
+            (:EQ 'classical-equality)
+            (:GT 'classical-greater-than)
+            (:GE 'classical-greater-equal)
+            (:LT 'classical-less-than)
+            (:LE 'classical-less-equal))
+          :target (parse-memory-or-formal-token target)
+          :left (parse-classical-argument (list left))
+          :right (parse-classical-argument right)))))))
 
 (defun indented-line (tok-line)
   (if (eql ':INDENT (token-type (first tok-line)))
@@ -1339,7 +1358,7 @@ result of BODY, and the (possibly null) list of remaining lines.
         (when (endp rest-toks)
           (quil-parse-error "CAPTURE instruction is missing memory reference."))
         (unless (endp (rest rest-toks))
-          (quil-parse-error "Unexpected token ~A in CAPTURE" (rest rest-toks)))
+          (quil-parse-error "Unexpected token ~A in CAPTURE" (cadr rest-toks)))
         (let ((address-obj (parse-memory-or-formal-token (first rest-toks)
                                                          :ensure-valid t)))
           (make-instance 'capture
@@ -1348,8 +1367,7 @@ result of BODY, and the (possibly null) list of remaining lines.
                          :waveform waveform-ref
                          :memory-ref address-obj))))))
 
-;;; TODO should RAW-CAPTURE allow for arithmetic expressions in the duration
-;;; TODO do we enforce rational durations?
+
 (defun parse-raw-capture (tok-lines)
   (match-line ((op :RAW-CAPTURE) &rest rest-toks) tok-lines
     (multiple-value-bind (qubits frame-name rest-toks)
@@ -1361,9 +1379,9 @@ result of BODY, and the (possibly null) list of remaining lines.
       (let ((duration (parse-argument (first rest-toks)))
             (addr (parse-memory-or-formal-token (second rest-toks) :ensure-valid t)))
         (unless (or (and (is-constant duration)
-                         (realp (constant-value duration)))
+                         (realp (constant-value duration))) ; TODO do we enforce rationality?
                     (is-formal duration))
-          (quil-parse-error "Expected RAW-CAPTURE duration to be a rational number or formal argument."))
+          (quil-parse-error "Expected RAW-CAPTURE duration to be a real number or formal argument."))
         (make-instance 'raw-capture
                        :qubit (first qubits)
                        :frame frame-name
@@ -1374,7 +1392,6 @@ result of BODY, and the (possibly null) list of remaining lines.
   (match-line ((op tok-type) &rest rest-toks) tok-lines
     (multiple-value-bind (qubits frame-name value-toks)
         (parse-frame rest-toks tok-type)
-      ;; TODO This allows for memory references in the value. Do we want that?
       (let ((result (parse-parameter-or-expression value-toks)))
         (make-instance
          (ecase tok-type
@@ -1418,10 +1435,6 @@ Returns the frame qubits, the frame name, and the remaining tokens."
 
 ;;; TODO
 ;;;  - this allows the waveform entries to be spread across multiple lines. is that ok?
-;;;  - this uses a lot of code from the gate definition parsing. refactor?
-;;;  - also, if the idea is that quilt should be "human readable", isn't it a bit terrible
-;;;    to have waveform definitions in the source? presumably they are much bigger than gate definitions...
-;;;    (since people are ok with small gates, which can be applied to various qubits)
 (defun parse-waveform-definition (tok-lines)
   "Parse a waveform definition from the token lines TOK-LINES."
   ;; Check that we have tokens left
@@ -1443,49 +1456,44 @@ Returns the frame qubits, the frame name, and the remaining tokens."
 
         ;; Check for a name.
         (unless (eql ':NAME (token-type (first params-args)))
-          (quil-parse-error "Expected a name for the DEFWAVEFORM"))
+          (disappointing-token-error (first params-args) "a name"))
 
         ;; We have a name. Stash it away.
         (setf name (token-payload (pop params-args)))
 
-        (let ((*definition-context* :DEFWAVEFORM))
-          (multiple-value-bind (params rest-line) (parse-parameters params-args)
-            ;; Check for colon and incise it.
-            (let ((maybe-colon (last rest-line)))
-              (when (or (null maybe-colon)
-                        (not (eql ':COLON (token-type (first maybe-colon)))))
-                (quil-parse-error "Expected a colon in DEFWAVEFORM")))
+        (multiple-value-bind (params rest-line) (parse-parameters params-args)
+          ;; Check for colon and incise it.
+          (let ((maybe-colon (last rest-line)))
+            (when (or (null maybe-colon)
+                      (not (eql ':COLON (token-type (first maybe-colon)))))
+              (quil-parse-error "Expected a colon in DEFWAVEFORM")))
 
-            (let ((*arithmetic-parameters* nil)
-                  (*segment-encountered* nil))
-              (multiple-value-bind (parsed-entries rest-lines)
-                  (parse-gate-or-waveform-entries body-lines)
-                ;; Check that we only refered to parameters in our param list.
-                (loop :for body-p :in (mapcar #'first *arithmetic-parameters*)
-                      :unless (find (param-name body-p) params :key #'param-name
-                                                               :test #'string=)
-                        :do (quil-parse-error
-                             "The parameter ~A was found in the body of the waveform definition of ~
-                              ~A but wasn't in the declared parameter list."
-                             (param-name body-p)
-                             name))
-                (let ((param-symbols
-                        ;; Make sure we have symbols for everything. Collect
-                        ;; a list of them in the same order as PARAMS.
-                        (loop :for p :in params
-                              :for found-p := (assoc (param-name p) *arithmetic-parameters*
-                                                     :key #'param-name
-                                                     :test #'string=)
-                              :if (null found-p)
-                                :collect (gensym (concatenate 'string (param-name p) "-UNUSED"))
-                              :else
-                                :collect (second found-p))))
-                  (values (make-waveform-definition name param-symbols parsed-entries)
-                          rest-lines))))))))))
-
-(defparameter *definition-context* nil
-  "A Quil keyword (e.g. :DEFGATE) indicating the context in which a
-portion of a definition is being parsed.")
+          (let ((*arithmetic-parameters* nil)
+                (*segment-encountered* nil))
+            (multiple-value-bind (parsed-entries rest-lines)
+                (parse-gate-or-waveform-entries body-lines)
+              ;; Check that we only refered to parameters in our param list.
+              (loop :for body-p :in (mapcar #'first *arithmetic-parameters*)
+                    :unless (find (param-name body-p) params :key #'param-name
+                                                             :test #'string=)
+                      :do (quil-parse-error
+                           "The parameter ~A was found in the body of the waveform definition of ~
+                           ~A but wasn't in the declared parameter list."
+                           (param-name body-p)
+                           name))
+              (let ((param-symbols
+                      ;; Make sure we have symbols for everything. Collect
+                      ;; a list of them in the same order as PARAMS.
+                      (loop :for p :in params
+                            :for found-p := (assoc (param-name p) *arithmetic-parameters*
+                                                   :key #'param-name
+                                                   :test #'string=)
+                            :if (null found-p)
+                              :collect (gensym (concatenate 'string (param-name p) "-UNUSED"))
+                            :else
+                              :collect (second found-p))))
+                (values (make-waveform-definition name param-symbols parsed-entries)
+                        rest-lines)))))))))
 
 (defun parse-parameters (params-args &key allow-expressions)
   "Parse a list of parameters, surrounded by a pair of parentheses. Returns the
@@ -1505,7 +1513,7 @@ When ALLOW-EXPRESSIONS is set, we allow for general arithmetic expressions in a 
 
     ;; Error if we didn't find a right parenthesis.
     (when (endp rest-line)
-      (quil-parse-error "No matching right paren in~@[ ~A~] parameters" *definition-context*))
+      (quil-parse-error "No matching right paren in~@[ ~A~] parameters" *parse-context*))
 
     ;; Remove right paren and stash away params.
     (pop rest-line)
@@ -1516,8 +1524,7 @@ When ALLOW-EXPRESSIONS is set, we allow for general arithmetic expressions in a 
                 (and (oddp (length found-params))
                      (loop :for c :in (rest found-params) :by #'cddr
                            :always (eql ':COMMA (token-type c)))))
-      ;; TODO generalize context
-      (quil-parse-error "Malformed parameter list~@[ in ~A~]: ~A" *definition-context* found-params))
+      (quil-parse-error "Malformed parameter list~@[ in ~A~]: ~A" *parse-context* found-params))
 
     ;; Parse out the parameters.
     (let ((entries
@@ -1558,13 +1565,12 @@ When ALLOW-EXPRESSIONS is set, we allow for general arithmetic expressions in a 
           ;; Check for name.
           (unless (or is-measure-calibration
                       (eql ':NAME (token-type (first params-args))))
-            (quil-parse-error "Expected a name for the DEFCAL"))
+            (quil-parse-error "Expected a name for the calibration."))
 
           ;; Stash it away.
           (setf name (token-payload (pop params-args)))
 
-          (let ((*definition-context* :DEFCAL)
-                (*formal-arguments-allowed* t))
+          (let ((*formal-arguments-allowed* t))
             (multiple-value-bind (params rest-line) (parse-parameters params-args :allow-expressions t)
               (when (and is-measure-calibration
                          (not (null params)))
@@ -1618,7 +1624,8 @@ When ALLOW-EXPRESSIONS is set, we allow for general arithmetic expressions in a 
   (let ((name-tok (first toks))
         (rest-toks (rest toks)))
     (unless (eql :NAME (token-type name-tok))
-      (quil-parse-error "Expected a NAME when parsing waveform reference."))
+      (quil-parse-error "Expected a NAME when parsing waveform reference~@[ in ~A]."
+                        name-tok))
     (if (endp rest-toks)
         (waveform-ref (token-payload name-tok))
         (multiple-value-bind (params rest)
