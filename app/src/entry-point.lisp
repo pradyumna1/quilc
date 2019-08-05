@@ -490,7 +490,7 @@ Version ~A is available from https://www.rigetti.com/forest~%"
          (let* ((program-text (slurp-lines))
                 (program (parse-quil program-text))
                 (original-matrix (when (and protoquil compute-matrix-reps)
-                                   (parsed-program-to-logical-matrix program))))
+                                   (parsed-program-to-logical-matrix program :compress-qubits t))))
            (multiple-value-bind (processed-program statistics)
                (process-program program (lookup-isa-descriptor-for-name isa)
                                 :protoquil protoquil
